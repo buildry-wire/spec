@@ -1,0 +1,591 @@
+openapi: 3.1.0
+info:
+  title: WirePayment Merchant API
+  version: "2026-05-09"
+  description: |
+    Unified payment gateway for Mongolian operators (QPay, SocialPay, loan apps),
+    exposed to merchants through one Stripe-style integration.
+
+    All amounts are MNT minor units (integer ₮; no fractions). Timestamps are
+    Unix seconds (UTC). IDs are Stripe-style prefixed strings
+    (`pi_`, `ch_`, `re_`, `evt_`, `we_`, `opc_`).
+
+    This document tracks the implemented M2 surface; operator-specific behaviour
+    (QPay, etc.) and hosted checkout are documented separately.
+servers:
+  - url: https://api.wire.mn
+    description: Production
+  - url: http://localhost:8080
+    description: Local dev
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: PaymentIntents
+  - name: Charges
+  - name: Events
+  - name: WebhookEndpoints
+  - name: OperatorConnections
+
+paths:
+  /v1/payment_intents:
+    post:
+      tags: [PaymentIntents]
+      summary: Create a PaymentIntent
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentIntentCreate" }
+      responses:
+        "200":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    get:
+      tags: [PaymentIntents]
+      summary: List PaymentIntents
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: A list of PaymentIntents
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PaymentIntent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/payment_intents/{id}:
+    get:
+      tags: [PaymentIntents]
+      summary: Retrieve a PaymentIntent
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: The PaymentIntent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/payment_intents/{id}/confirm:
+    post:
+      tags: [PaymentIntents]
+      summary: Confirm a PaymentIntent (dispatch to operator)
+      parameters:
+        - $ref: "#/components/parameters/PathID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                operator:
+                  type: string
+                  description: Operator id; defaults to the first allowed operator.
+                return_url:
+                  type: string
+      responses:
+        "200":
+          description: The confirmed PaymentIntent (now requires_action)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "402": { $ref: "#/components/responses/PaymentMethodError" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "424": { $ref: "#/components/responses/OperatorError" }
+
+  /v1/payment_intents/{id}/cancel:
+    post:
+      tags: [PaymentIntents]
+      summary: Cancel a PaymentIntent
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: The canceled PaymentIntent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentIntent" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/charges:
+    get:
+      tags: [Charges]
+      summary: List Charges
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - name: payment_intent
+          in: query
+          schema: { type: string }
+          description: Filter to a single PaymentIntent.
+      responses:
+        "200":
+          description: A list of Charges
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Charge" }
+
+  /v1/charges/{id}:
+    get:
+      tags: [Charges]
+      summary: Retrieve a Charge
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: The Charge
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Charge" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/events:
+    get:
+      tags: [Events]
+      summary: List Events
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+        - name: type
+          in: query
+          schema: { type: string }
+          description: Filter by event type (e.g. payment_intent.succeeded).
+      responses:
+        "200":
+          description: A list of Events
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Event" }
+
+  /v1/events/{id}:
+    get:
+      tags: [Events]
+      summary: Retrieve an Event
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: The Event
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/webhook_endpoints:
+    post:
+      tags: [WebhookEndpoints]
+      summary: Create a webhook endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                enabled_events:
+                  type: array
+                  items: { type: string }
+                  description: Defaults to ["*"] (all events).
+      responses:
+        "200":
+          description: The endpoint, including the signing secret (returned only here)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpointWithSecret" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+    get:
+      tags: [WebhookEndpoints]
+      summary: List webhook endpoints
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: A list of webhook endpoints
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/WebhookEndpoint" }
+
+  /v1/webhook_endpoints/{id}:
+    get:
+      tags: [WebhookEndpoints]
+      summary: Retrieve a webhook endpoint
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: The endpoint (secret omitted)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [WebhookEndpoints]
+      summary: Update a webhook endpoint
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, format: uri }
+                enabled_events:
+                  type: array
+                  items: { type: string }
+                status:
+                  type: string
+                  enum: [enabled, disabled]
+      responses:
+        "200":
+          description: The updated endpoint
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpoint" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [WebhookEndpoints]
+      summary: Delete a webhook endpoint
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: Deletion acknowledgement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deleted" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/operator_connections:
+    post:
+      tags: [OperatorConnections]
+      summary: Connect an operator (BYO credentials)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operator, credentials]
+              properties:
+                operator: { type: string }
+                mode:
+                  type: string
+                  enum: [byo, reseller]
+                  default: byo
+                credentials:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Operator credentials; encrypted at rest, never returned.
+      responses:
+        "200":
+          description: The connection (credentials never returned)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorConnection" }
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+    get:
+      tags: [OperatorConnections]
+      summary: List operator connections
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/StartingAfter"
+      responses:
+        "200":
+          description: A list of operator connections
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListBase"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/OperatorConnection" }
+
+  /v1/operator_connections/{id}:
+    get:
+      tags: [OperatorConnections]
+      summary: Retrieve an operator connection
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: The connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorConnection" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [OperatorConnections]
+      summary: Delete an operator connection
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: Deletion acknowledgement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deleted" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/operator_connections/{id}/test:
+    post:
+      tags: [OperatorConnections]
+      summary: Test an operator connection
+      description: Verifies the operator is registered and credentials decrypt; marks the connection active.
+      parameters: [{ $ref: "#/components/parameters/PathID" }]
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorConnectionTest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "API key as a bearer token (Authorization: Bearer sk_live_...)."
+
+  parameters:
+    PathID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+    StartingAfter:
+      name: starting_after
+      in: query
+      schema: { type: string }
+      description: Cursor — an object id; returns the page after it.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string }
+      description: Required in practice for safe retries of POST mutations (48h TTL).
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InvalidRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    PaymentMethodError:
+      description: Operator declined the payment method
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    OperatorError:
+      description: Operator-side infrastructure failure
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    ListBase:
+      type: object
+      properties:
+        object: { type: string, const: list }
+        url: { type: string }
+        has_more: { type: boolean }
+      required: [object, url, has_more, data]
+
+    Deleted:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string }
+        deleted: { type: boolean, const: true }
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [invalid_request_error, api_error, idempotency_error, payment_method_error, operator_error]
+            code: { type: string }
+            message: { type: string }
+            param: { type: string }
+            request_id: { type: string }
+            doc_url: { type: string }
+            operator_decline_code: { type: string }
+          required: [type, message]
+
+    PaymentIntentCreate:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, description: Minor units (MNT ₮). }
+        currency: { type: string, default: MNT, description: V1 supports MNT only. }
+        automatic_operator: { type: boolean, default: true }
+        allowed_operators:
+          type: array
+          items: { type: string }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+
+    PaymentIntent:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: payment_intent }
+        amount: { type: integer }
+        currency: { type: string }
+        status:
+          type: string
+          enum: [new, requires_payment_method, requires_action, requires_capture, processing, succeeded, canceled]
+        client_secret: { type: string }
+        automatic_operator: { type: boolean }
+        allowed_operators:
+          type: array
+          items: { type: string }
+        selected_operator: { type: [string, "null"] }
+        next_action: { type: [object, "null"] }
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        livemode: { type: boolean }
+        created: { type: integer }
+        expires_at: { type: [integer, "null"] }
+
+    Charge:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: charge }
+        payment_intent: { type: string }
+        operator: { type: string }
+        operator_charge_id: { type: [string, "null"] }
+        status:
+          type: string
+          enum: [pending, succeeded, failed]
+        amount: { type: integer }
+        fee: { type: integer }
+        amount_refunded: { type: integer }
+        failure_code: { type: [string, "null"] }
+        failure_message: { type: [string, "null"] }
+        livemode: { type: boolean }
+        created: { type: integer }
+
+    Event:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: event }
+        type: { type: string }
+        api_version: { type: string }
+        data:
+          type: object
+          description: The event payload (e.g. the affected resource).
+        livemode: { type: boolean }
+        created: { type: integer }
+
+    WebhookEndpoint:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: webhook_endpoint }
+        url: { type: string }
+        enabled_events:
+          type: array
+          items: { type: string }
+        status:
+          type: string
+          enum: [enabled, disabled]
+        livemode: { type: boolean }
+        created: { type: integer }
+
+    WebhookEndpointWithSecret:
+      allOf:
+        - $ref: "#/components/schemas/WebhookEndpoint"
+        - type: object
+          properties:
+            secret:
+              type: string
+              description: Signing secret (whsec_...), returned only at creation.
+
+    OperatorConnection:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, const: operator_connection }
+        operator: { type: string }
+        mode:
+          type: string
+          enum: [byo, reseller]
+        status: { type: string }
+        capabilities:
+          type: array
+          items: { type: string }
+        created: { type: integer }
+
+    OperatorConnectionTest:
+      type: object
+      properties:
+        object: { type: string, const: operator_connection_test }
+        operator: { type: string }
+        status: { type: string, examples: [ok] }
+        capabilities:
+          type: array
+          items: { type: string }
