@@ -3,15 +3,15 @@ info:
   title: WirePayment Merchant API
   version: "2026-05-09"
   description: |
-    Unified payment gateway for Mongolian operators (QPay, SocialPay, loan apps),
-    exposed to merchants through one Stripe-style integration.
+    Unified payment gateway for Mongolian payment operators, exposed to merchants
+    through a single integration.
 
     All amounts are MNT minor units (integer ₮; no fractions). Timestamps are
-    Unix seconds (UTC). IDs are Stripe-style prefixed strings
+    Unix seconds (UTC). IDs are prefixed strings
     (`pi_`, `ch_`, `re_`, `evt_`, `we_`, `opc_`).
 
     This document tracks the implemented M2 surface; operator-specific behaviour
-    (QPay, etc.) and hosted checkout are documented separately.
+    and hosted checkout are documented separately.
 servers:
   - url: https://api.wire.mn
     description: Production
